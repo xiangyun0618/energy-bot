@@ -1,0 +1,25 @@
+# Python Cache
+__pycache__/
+*.pyc
+
+# Virtual Environment
+venv/
+env/
+Lib/
+Scripts/
+bin/
+Include/
+pip-selfcheck.json
+
+# Windows Junk
+Thumbs.db
+Desktop.ini
+
+# Log Files
+*.log
+
+# Old mistake folders
+bot/
+
+# If you don’t want to leak user data:
+data/*.json
