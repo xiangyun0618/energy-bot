@@ -70,7 +70,88 @@ def handle_message(event):
     if st:
         handle_registration(event, st)
         return
+    
+    # 只有管理員可以維護廠區與設備
+    user = db.get_user(user_id)
 
+    # 新增廠區：格式「新增廠區 北區二廠」
+    if msg.startswith("新增廠區"):
+        if not user or user.get("role") != "管理員":
+            reply_text(event.reply_token, "只有管理員可以新增廠區。")
+            return
+
+        name = msg.replace("新增廠區", "", 1).strip()
+        if not name:
+            reply_text(event.reply_token, "請在『新增廠區』後面加上名稱，例如：新增廠區 北區二廠")
+            return
+
+        ok = db.add_factory(name)
+        if ok:
+            reply_text(event.reply_token, f"已新增廠區：{name}")
+        else:
+            reply_text(event.reply_token, f"新增失敗，可能廠區已存在：{name}")
+        return
+
+    # 刪除廠區：格式「刪除廠區 北區二廠」
+    if msg.startswith("刪除廠區"):
+        if not user or user.get("role") != "管理員":
+            reply_text(event.reply_token, "只有管理員可以刪除廠區。")
+            return
+
+        name = msg.replace("刪除廠區", "", 1).strip()
+        if not name:
+            reply_text(event.reply_token, "請在『刪除廠區』後面加上名稱，例如：刪除廠區 北區二廠")
+            return
+
+        ok = db.delete_factory(name)
+        if ok:
+            reply_text(event.reply_token, f"已刪除廠區：{name}")
+        else:
+            reply_text(event.reply_token, f"刪除失敗，找不到廠區：{name}")
+        return
+    
+    # 新增設備：格式「新增設備 廠區名 設備名稱」
+    # 範例：新增設備 北區廠 PCS-01
+    if msg.startswith("新增設備"):
+        if not user or user.get("role") != "管理員":
+            reply_text(event.reply_token, "只有管理員可以新增設備。")
+            return
+
+        parts = msg.split()
+        if len(parts) < 3:
+            reply_text(event.reply_token, "格式錯誤，請用：新增設備 廠區名 設備名稱\n例如：新增設備 北區廠 PCS-01")
+            return
+
+        factory = parts[1]
+        eq_name = " ".join(parts[2:])
+
+        eq = db.add_equipment(factory, eq_name)
+        if eq:
+            reply_text(event.reply_token, f"已新增設備：{factory} / {eq_name}（ID: {eq['id']}）")
+        else:
+            reply_text(event.reply_token, "新增設備失敗，請確認輸入。")
+        return
+
+    # 刪除設備：格式「刪除設備 ID」
+    # 範例：刪除設備 3
+    if msg.startswith("刪除設備"):
+        if not user or user.get("role") != "管理員":
+            reply_text(event.reply_token, "只有管理員可以刪除設備。")
+            return
+
+        parts = msg.split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            reply_text(event.reply_token, "格式錯誤，請用：刪除設備 設備ID\n例如：刪除設備 3")
+            return
+
+        eq_id = int(parts[1])
+        ok = db.delete_equipment(eq_id)
+        if ok:
+            reply_text(event.reply_token, f"已刪除設備（ID: {eq_id}）。")
+        else:
+            reply_text(event.reply_token, f"刪除失敗，找不到設備 ID: {eq_id}")
+        return
+    
     # ---- 指令 ----
     if msg == "註冊":
         cs.start_registration(user_id)
@@ -93,11 +174,9 @@ def handle_registration(event, state):
 
     # STEP 1：姓名
     if step == 1:
-        # 存姓名
         cs.set_temp(user_id, "name", msg)
         cs.advance(user_id)
 
-        # 問角色
         reply_text(
             reply_token,
             "請輸入你的角色（輸入數字）：\n" +
@@ -114,7 +193,6 @@ def handle_registration(event, state):
                 cs.set_temp(user_id, "role", role)
                 cs.advance(user_id)
 
-                # 問廠區
                 factories = db.get_factories()
                 reply_text(
                     reply_token,
@@ -126,20 +204,19 @@ def handle_registration(event, state):
         reply_text(reply_token, "輸入錯誤，請重新輸入角色的『數字』。")
         return
 
-    # STEP 3：廠區
+    # STEP 3：主要廠區
     if step == 3:
         factories = db.get_factories()
         if msg.isdigit():
             idx = int(msg) - 1
             if 0 <= idx < len(factories):
                 factory = factories[idx]
-                cs.set_temp(user_id, "factory", factory)
+                cs.set_temp(user_id, "primary_factory", factory)
                 cs.advance(user_id)
 
-                # 問優先級
                 reply_text(
                     reply_token,
-                    "請設定你在此廠區的優先級（輸入數字）：\n"
+                    "請設定在【主要廠區】的優先級（輸入數字）：\n"
                     "1. 第一優先（主要負責）\n"
                     "2. 第二優先\n"
                     "3. 第三優先"
@@ -149,44 +226,150 @@ def handle_registration(event, state):
         reply_text(reply_token, "輸入錯誤，請重新輸入廠區的『數字』。")
         return
 
-    # STEP 4：優先級
+    # STEP 4：主要廠區優先級
     if step == 4:
         if msg not in ["1", "2", "3"]:
             reply_text(reply_token, "請輸入 1、2 或 3 來設定優先級。")
             return
 
-        priority = int(msg)
-
-        # 把暫存資料拿出來
-        name = cs.get_temp(user_id, "name")
-        role = cs.get_temp(user_id, "role")
-        factory = cs.get_temp(user_id, "factory")
-
-        # 建立 factory_priority dict（之後一個人要多廠區時，可以再用 update_user 去加）
-        fp = {factory: priority}
-
-        # 寫入 DB
-        db.add_user(
-            user_id=user_id,
-            name=name,
-            factory_priority=fp,
-            role=role
-        )
-
-        priority_text = {1: "第一優先", 2: "第二優先", 3: "第三優先"}[priority]
+        cs.set_temp(user_id, "primary_priority", int(msg))
+        cs.advance(user_id)
 
         reply_text(
             reply_token,
-            "註冊完成！\n"
-            f"姓名：{name}\n"
-            f"角色：{role}\n"
-            f"廠區：{factory}\n"
-            f"優先級：{priority_text}"
+            "是否還要設定【第二優先廠區】？\n"
+            "若有請回覆「是」，沒有請回覆「否」。"
         )
-
-        # 清掉註冊流程狀態
-        cs.clear(user_id)
         return
+
+    # STEP 5：是否有第二優先
+    if step == 5:
+        msg_norm = msg.strip()
+        if msg_norm in ["是", "有", "Y", "y"]:
+            cs.advance(user_id)
+
+            factories = db.get_factories()
+            primary_factory = cs.get_temp(user_id, "primary_factory")
+            # 排除已選的主要廠區
+            options = [f for f in factories if f != primary_factory]
+
+            if not options:
+                # 沒其他廠區可以選，就直接完成
+                _finish_registration_without_second(user_id, reply_token)
+                return
+
+            cs.set_temp(user_id, "second_options", options)
+
+            reply_text(
+                reply_token,
+                "請選擇第二優先廠區（輸入數字）：\n" +
+                "\n".join(f"{i+1}. {f}" for i, f in enumerate(options))
+            )
+            return
+
+        elif msg_norm in ["否", "沒有", "N", "n"]:
+            _finish_registration_without_second(user_id, reply_token)
+            return
+
+        else:
+            reply_text(reply_token, "請回覆「是」或「否」。")
+            return
+
+    # STEP 6：第二優先廠區
+    if step == 6:
+        options = cs.get_temp(user_id, "second_options") or []
+        if msg.isdigit():
+            idx = int(msg) - 1
+            if 0 <= idx < len(options):
+                second_factory = options[idx]
+                cs.set_temp(user_id, "second_factory", second_factory)
+                cs.advance(user_id)
+
+                reply_text(
+                    reply_token,
+                    "請設定【第二優先廠區】的優先級（輸入數字）：\n"
+                    "1. 第一優先\n"
+                    "2. 第二優先\n"
+                    "3. 第三優先"
+                )
+                return
+
+        reply_text(reply_token, "輸入錯誤，請重新輸入第二優先廠區的『數字』。")
+        return
+
+    # STEP 7：第二優先廠區優先級，然後完成註冊
+    if step == 7:
+        if msg not in ["1", "2", "3"]:
+            reply_text(reply_token, "請輸入 1、2 或 3 來設定優先級。")
+            return
+
+        cs.set_temp(user_id, "second_priority", int(msg))
+        _finish_registration_with_second(user_id, reply_token)
+        return
+
+
+# ----------------- 註冊完成（只有主要廠區） --------------------
+def _finish_registration_without_second(user_id, reply_token):
+    name = cs.get_temp(user_id, "name")
+    role = cs.get_temp(user_id, "role")
+    primary_factory = cs.get_temp(user_id, "primary_factory")
+    primary_priority = cs.get_temp(user_id, "primary_priority")
+
+    fp = {primary_factory: primary_priority}
+
+    db.add_user(
+        user_id=user_id,
+        name=name,
+        factory_priority=fp,
+        role=role
+    )
+
+    priority_text = {1: "第一優先", 2: "第二優先", 3: "第三優先"}[primary_priority]
+
+    reply_text(
+        reply_token,
+        "註冊完成！\n"
+        f"姓名：{name}\n"
+        f"角色：{role}\n"
+        f"主要廠區：{primary_factory}\n"
+        f"優先級：{priority_text}"
+    )
+
+    cs.clear(user_id)
+
+
+# ----------------- 註冊完成（有第二優先） --------------------
+def _finish_registration_with_second(user_id, reply_token):
+    name = cs.get_temp(user_id, "name")
+    role = cs.get_temp(user_id, "role")
+    primary_factory = cs.get_temp(user_id, "primary_factory")
+    primary_priority = cs.get_temp(user_id, "primary_priority")
+    second_factory = cs.get_temp(user_id, "second_factory")
+    second_priority = cs.get_temp(user_id, "second_priority")
+
+    fp = {
+        primary_factory: primary_priority,
+        second_factory: second_priority
+    }
+
+    db.add_user(
+        user_id=user_id,
+        name=name,
+        factory_priority=fp,
+        role=role
+    )
+
+    map_p = {1: "第一優先", 2: "第二優先", 3: "第三優先"}
+    reply_text(
+        reply_token,
+        "註冊完成！\n"
+        f"姓名：{name}\n"
+        f"角色：{role}\n"
+        f"主要廠區：{primary_factory}（{map_p[primary_priority]}）\n"
+        f"第二優先廠區：{second_factory}（{map_p[second_priority]}）"
+    )
+
+    cs.clear(user_id)
 
 
 # ----------------- 查詢任務 --------------------
@@ -260,7 +443,6 @@ def schedule_loop():
         schedule.run_pending()
         time.sleep(1)
 
-
 schedule.every().day.at("08:30").do(assign_daily_tasks)
 # 若要測試立即派任：取消註解下一行
 # schedule.every(1).minutes.do(assign_daily_tasks)
@@ -270,6 +452,7 @@ schedule.every().day.at("08:30").do(assign_daily_tasks)
 if __name__ == "__main__":
     print("目前廠區：", db.get_factories())
     print("目前使用者：", db.get_all_users())
+    print("Render auto deploy test")
 
     t = threading.Thread(target=schedule_loop, daemon=True)
     t.start()

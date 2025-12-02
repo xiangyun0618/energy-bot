@@ -2,6 +2,8 @@
 # 以簡單 dict 在記憶中追蹤使用者註冊步驟（重啟會消失；日後可改為 DB）
 state = {}  # user_id -> {"step": int, "temp": {...}}
 
+
+
 def start_registration(user_id):
     state[user_id] = {"step": 1, "temp": {}}
 
