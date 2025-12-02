@@ -8,13 +8,15 @@ import threading
 import time
 from datetime import date
 
+import os
+
 from db_manager import DBManager
 import conversation as cs
 from defaults import DEFAULT_FACTORIES, DEFAULT_ROLES
 
-# -------- LIN bot鑰匙
-CHANNEL_ACCESS_TOKEN = "u4p4unvbBT5lOyviTeYqEJo55LRUgrOvo/HACg3j8UJHHb5cCCp1foBU90Jd4V3gz088o0XmBqu5205Et8LxVFWvQdrcME8du4gjiFLLQlvENsGAjmPqcHA/VjkjN1fRusdX6zWrqbuvJPU9d4UYmQdB04t89/1O/w1cDnyilFU="
-CHANNEL_SECRET = "364923ff3133b13b3be5b6c5785d9e38"
+# Line bot鑰匙
+CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 # ----------------------------------------------------
 
 app = Flask(__name__)
@@ -91,56 +93,11 @@ def handle_registration(event, state):
 
     # STEP 1：姓名
     if step == 1:
+        # 存姓名
         cs.set_temp(user_id, "name", msg)
         cs.advance(user_id)
 
-        factories = db.get_factories()
-        reply_text(
-            reply_token,
-            "請選擇主要廠區（輸入數字）：\n" +
-            "\n".join(f"{i+1}. {f}" for i, f in enumerate(factories))
-        )
-        return
-
-    # STEP 2：主要廠區
-    if step == 2:
-        factories = db.get_factories()
-        if msg.isdigit():
-            idx = int(msg) - 1
-            if 0 <= idx < len(factories):
-                primary_factory = factories[idx]
-                cs.set_temp(user_id, "primary_factory", primary_factory)
-                cs.advance(user_id)
-
-                reply_text(
-                    reply_token,
-                    "請輸入次要廠區（可多選，使用逗號分隔）。\n如果沒有，請輸入「無」。\n\n範例：2,4"
-                )
-                return
-
-        reply_text(reply_token, "輸入錯誤，請重新輸入主要廠區的『數字』。")
-        return
-
-    # STEP 3：次要廠區（可選擇多個）
-    if step == 3:
-        factories = db.get_factories()
-        primary = cs.get_temp(user_id, "primary_factory")
-
-        secondary_list = []
-        if msg != "無":
-            parts = msg.split(",")
-            for p in parts:
-                p = p.strip()
-                if p.isdigit():
-                    idx = int(p) - 1
-                    if 0 <= idx < len(factories):
-                        fac = factories[idx]
-                        if fac != primary:   # 避免重複
-                            secondary_list.append(fac)
-
-        cs.set_temp(user_id, "secondary_factories", secondary_list)
-        cs.advance(user_id)
-
+        # 問角色
         reply_text(
             reply_token,
             "請輸入你的角色（輸入數字）：\n" +
@@ -148,40 +105,87 @@ def handle_registration(event, state):
         )
         return
 
-    # STEP 4：角色
-    if step == 4:
+    # STEP 2：角色
+    if step == 2:
         if msg.isdigit():
             idx = int(msg) - 1
             if 0 <= idx < len(DEFAULT_ROLES):
                 role = DEFAULT_ROLES[idx]
+                cs.set_temp(user_id, "role", role)
+                cs.advance(user_id)
 
-                # 建立 factory_priority
-                primary = cs.get_temp(user_id, "primary_factory")
-                secondary = cs.get_temp(user_id, "secondary_factories")
-
-                fp = {primary: 1}  # 主要廠區優先級 1
-                for fac in secondary:
-                    fp[fac] = 2      # 次要廠區優先級 2
-
-                name = cs.get_temp(user_id, "name")
-
-                # 新增使用者
-                db.add_user(
-                    user_id=user_id,
-                    name=name,
-                    factory_priority=fp,
-                    role=role
-                )
-
+                # 問廠區
+                factories = db.get_factories()
                 reply_text(
                     reply_token,
-                    f"註冊完成！\n姓名：{name}\n\n主要廠區：{primary}\n次要廠區：{','.join(secondary) if secondary else '無'}\n角色：{role}"
+                    "請選擇主要廠區（輸入數字）：\n" +
+                    "\n".join(f"{i+1}. {f}" for i, f in enumerate(factories))
                 )
-
-                cs.clear(user_id)
                 return
 
-        reply_text(event.reply_token, "輸入錯誤，請重新輸入角色的『數字』。")
+        reply_text(reply_token, "輸入錯誤，請重新輸入角色的『數字』。")
+        return
+
+    # STEP 3：廠區
+    if step == 3:
+        factories = db.get_factories()
+        if msg.isdigit():
+            idx = int(msg) - 1
+            if 0 <= idx < len(factories):
+                factory = factories[idx]
+                cs.set_temp(user_id, "factory", factory)
+                cs.advance(user_id)
+
+                # 問優先級
+                reply_text(
+                    reply_token,
+                    "請設定你在此廠區的優先級（輸入數字）：\n"
+                    "1. 第一優先（主要負責）\n"
+                    "2. 第二優先\n"
+                    "3. 第三優先"
+                )
+                return
+
+        reply_text(reply_token, "輸入錯誤，請重新輸入廠區的『數字』。")
+        return
+
+    # STEP 4：優先級
+    if step == 4:
+        if msg not in ["1", "2", "3"]:
+            reply_text(reply_token, "請輸入 1、2 或 3 來設定優先級。")
+            return
+
+        priority = int(msg)
+
+        # 把暫存資料拿出來
+        name = cs.get_temp(user_id, "name")
+        role = cs.get_temp(user_id, "role")
+        factory = cs.get_temp(user_id, "factory")
+
+        # 建立 factory_priority dict（之後一個人要多廠區時，可以再用 update_user 去加）
+        fp = {factory: priority}
+
+        # 寫入 DB
+        db.add_user(
+            user_id=user_id,
+            name=name,
+            factory_priority=fp,
+            role=role
+        )
+
+        priority_text = {1: "第一優先", 2: "第二優先", 3: "第三優先"}[priority]
+
+        reply_text(
+            reply_token,
+            "註冊完成！\n"
+            f"姓名：{name}\n"
+            f"角色：{role}\n"
+            f"廠區：{factory}\n"
+            f"優先級：{priority_text}"
+        )
+
+        # 清掉註冊流程狀態
+        cs.clear(user_id)
         return
 
 
